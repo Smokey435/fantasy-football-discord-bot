@@ -1,0 +1,14 @@
+{
+  "name": "fantasy-football-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for fantasy football updates",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.7.1",
+    "axios": "^1.3.4",
+    "node-cron": "^3.0.2"
+  }
+}
