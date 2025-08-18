@@ -2,12 +2,10 @@ const { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, REST, Rout
 const axios = require('axios');
 const cron = require('node-cron');
 
-// Configuration - YOU NEED TO CHANGE THESE
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const SLEEPER_LEAGUE_ID = process.env.SLEEPER_LEAGUE_ID;
 const DISCORD_CHANNEL_ID = process.env.DISCORD_CHANNEL_ID;
 
-// Create Discord client
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -16,14 +14,11 @@ const client = new Client({
     ]
 });
 
-// Sleeper API base URL
 const SLEEPER_API = 'https://api.sleeper.app/v1';
 
-// Bot ready event
 client.once('ready', async () => {
     console.log(`${client.user.tag} is online and ready!`);
     
-    // Register slash commands
     const commands = [
         new SlashCommandBuilder()
             .setName('standings')
@@ -63,7 +58,6 @@ client.once('ready', async () => {
     }
 });
 
-// Slash command handler
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
@@ -87,7 +81,6 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-// Get current NFL week
 async function getCurrentWeek() {
     try {
         const response = await axios.get(`${SLEEPER_API}/state/nfl`);
@@ -98,35 +91,28 @@ async function getCurrentWeek() {
     }
 }
 
-// Handle standings command
 async function handleStandings(interaction) {
     await interaction.deferReply();
     
     try {
-        // Get league info
         const leagueResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}`);
         const league = leagueResponse.data;
         
-        // Get rosters
         const rostersResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/rosters`);
         const rosters = rostersResponse.data;
         
-        // Get users
         const usersResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`);
         const users = usersResponse.data;
         
-        // Create user lookup
         const userLookup = {};
         users.forEach(user => {
             userLookup[user.user_id] = user.display_name || user.username;
         });
         
-        // Sort rosters by wins, then by points
         const sortedRosters = rosters
             .map(roster => ({
                 ...roster,
-                owner_name: userLookup[roster.owner_id] || 'Unknown',
-                win_pct: roster.settings.wins / (roster.settings.wins + roster.settings.losses)
+                owner_name: userLookup[roster.owner_id] || 'Unknown'
             }))
             .sort((a, b) => {
                 if (b.settings.wins !== a.settings.wins) {
@@ -135,7 +121,6 @@ async function handleStandings(interaction) {
                 return b.settings.fpts - a.settings.fpts;
             });
         
-        // Create standings embed
         const embed = new EmbedBuilder()
             .setTitle(`${league.name} - Standings`)
             .setColor(0x0099FF)
@@ -151,7 +136,6 @@ async function handleStandings(interaction) {
         });
         
         embed.setDescription(standingsText);
-        
         await interaction.editReply({ embeds: [embed] });
     } catch (error) {
         console.error('Error in standings:', error);
@@ -159,26 +143,21 @@ async function handleStandings(interaction) {
     }
 }
 
-// Handle matchup command
 async function handleMatchup(interaction) {
     await interaction.deferReply();
     
     const week = interaction.options.getInteger('week') || await getCurrentWeek();
     
     try {
-        // Get matchups
         const matchupsResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/matchups/${week}`);
         const matchups = matchupsResponse.data;
         
-        // Get users
         const usersResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`);
         const users = usersResponse.data;
         
-        // Get rosters
         const rostersResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/rosters`);
         const rosters = rostersResponse.data;
         
-        // Create lookups
         const userLookup = {};
         users.forEach(user => {
             userLookup[user.user_id] = user.display_name || user.username;
@@ -189,7 +168,6 @@ async function handleMatchup(interaction) {
             rosterLookup[roster.roster_id] = userLookup[roster.owner_id] || 'Unknown';
         });
         
-        // Group matchups by matchup_id
         const matchupGroups = {};
         matchups.forEach(matchup => {
             if (!matchupGroups[matchup.matchup_id]) {
@@ -198,7 +176,6 @@ async function handleMatchup(interaction) {
             matchupGroups[matchup.matchup_id].push(matchup);
         });
         
-        // Create embed
         const embed = new EmbedBuilder()
             .setTitle(`Week ${week} Matchups`)
             .setColor(0x00FF00)
@@ -219,7 +196,6 @@ async function handleMatchup(interaction) {
         });
         
         embed.setDescription(matchupText || 'No matchups found for this week.');
-        
         await interaction.editReply({ embeds: [embed] });
     } catch (error) {
         console.error('Error in matchup:', error);
@@ -227,14 +203,12 @@ async function handleMatchup(interaction) {
     }
 }
 
-// Handle roster command  
 async function handleRoster(interaction) {
     await interaction.deferReply();
     
     const teamName = interaction.options.getString('team');
     
     try {
-        // Get league data
         const [rostersResponse, usersResponse, playersResponse] = await Promise.all([
             axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/rosters`),
             axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`),
@@ -245,13 +219,11 @@ async function handleRoster(interaction) {
         const users = usersResponse.data;
         const players = playersResponse.data;
         
-        // Create user lookup
         const userLookup = {};
         users.forEach(user => {
             userLookup[user.user_id] = user.display_name || user.username;
         });
         
-        // Find the roster
         let targetRoster;
         if (teamName) {
             targetRoster = rosters.find(roster => {
@@ -259,7 +231,7 @@ async function handleRoster(interaction) {
                 return ownerName.includes(teamName.toLowerCase());
             });
         } else {
-            targetRoster = rosters[0]; // First roster if no team specified
+            targetRoster = rosters[0];
         }
         
         if (!targetRoster) {
@@ -272,11 +244,9 @@ async function handleRoster(interaction) {
         const losses = targetRoster.settings.losses;
         const points = targetRoster.settings.fpts.toFixed(1);
         
-        // Get starters
         const starters = targetRoster.starters || [];
         const bench = (targetRoster.players || []).filter(p => !starters.includes(p));
         
-        // Format players
         const formatPlayers = (playerIds) => {
             return playerIds.map(id => {
                 const player = players[id];
@@ -310,38 +280,20 @@ async function handleRoster(interaction) {
     }
 }
 
-// Handle trades command
 async function handleTrades(interaction) {
     await interaction.deferReply();
     
     try {
         const currentWeek = await getCurrentWeek();
-        
-        // Get recent transactions
         const transactionsResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/transactions/${currentWeek}`);
         const transactions = transactionsResponse.data;
         
-        // Filter trades
         const trades = transactions.filter(t => t.type === 'trade').slice(0, 5);
         
         if (trades.length === 0) {
             await interaction.editReply('No recent trades found!');
             return;
         }
-        
-        // Get users and players for context
-        const [usersResponse, playersResponse] = await Promise.all([
-            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`),
-            axios.get(`${SLEEPER_API}/players/nfl`)
-        ]);
-        
-        const users = usersResponse.data;
-        const players = playersResponse.data;
-        
-        const userLookup = {};
-        users.forEach(user => {
-            userLookup[user.user_id] = user.display_name || user.username;
-        });
         
         const embed = new EmbedBuilder()
             .setTitle('Recent Trades')
@@ -356,7 +308,6 @@ async function handleTrades(interaction) {
         });
         
         embed.setDescription(tradeText);
-        
         await interaction.editReply({ embeds: [embed] });
     } catch (error) {
         console.error('Error in trades:', error);
@@ -364,16 +315,74 @@ async function handleTrades(interaction) {
     }
 }
 
-// Handle waivers command
 async function handleWaivers(interaction) {
     await interaction.deferReply();
     
     try {
         const currentWeek = await getCurrentWeek();
-        
-        // Get recent transactions
         const transactionsResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/transactions/${currentWeek}`);
         const transactions = transactionsResponse.data;
         
-        // Filter waiver claims
-        const
+        const waivers = transactions.filter(t => 
+            t.type === 'waiver' || t.type === 'free_agent'
+        ).slice(0, 10);
+        
+        if (waivers.length === 0) {
+            await interaction.editReply('No recent waiver activity!');
+            return;
+        }
+        
+        const embed = new EmbedBuilder()
+            .setTitle('Recent Waiver Activity')
+            .setColor(0x9932CC)
+            .setDescription(`${waivers.length} recent moves found`)
+            .setTimestamp();
+        
+        await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error in waivers:', error);
+        await interaction.editReply('Error getting waiver activity. Please try again!');
+    }
+}
+
+cron.schedule('0 10 * * 2', async () => {
+    try {
+        const channel = client.channels.cache.get(DISCORD_CHANNEL_ID);
+        if (!channel) return;
+        
+        const currentWeek = await getCurrentWeek();
+        
+        const embed = new EmbedBuilder()
+            .setTitle(`🏈 Week ${currentWeek} Preview`)
+            .setDescription('New week is here! Use `/matchup` to see all matchups!')
+            .setColor(0x00FF00)
+            .setTimestamp();
+        
+        await channel.send({ embeds: [embed] });
+        console.log(`Sent week ${currentWeek} preview`);
+    } catch (error) {
+        console.error('Error sending weekly preview:', error);
+    }
+});
+
+cron.schedule('0 8 * * 2', async () => {
+    try {
+        const channel = client.channels.cache.get(DISCORD_CHANNEL_ID);
+        if (!channel) return;
+        
+        const lastWeek = (await getCurrentWeek()) - 1;
+        
+        const embed = new EmbedBuilder()
+            .setTitle(`📊 Week ${lastWeek} Results`)
+            .setDescription('Check out last week\'s results with `/matchup ' + lastWeek + '`!')
+            .setColor(0x0099FF)
+            .setTimestamp();
+        
+        await channel.send({ embeds: [embed] });
+        console.log(`Sent week ${lastWeek} results recap`);
+    } catch (error) {
+        console.error('Error sending weekly recap:', error);
+    }
+});
+
+client.login(DISCORD_TOKEN);
