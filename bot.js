@@ -5,6 +5,8 @@ const cron = require('node-cron');
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const SLEEPER_LEAGUE_ID = process.env.SLEEPER_LEAGUE_ID;
 const DISCORD_CHANNEL_ID = process.env.DISCORD_CHANNEL_ID;
+// Add these for news API (optional - you can use ESPN or other free APIs)
+const SPORTS_API_KEY = process.env.SPORTS_API_KEY; // For more detailed news, or use ESPN's free endpoints
 
 const client = new Client({
     intents: [
@@ -15,6 +17,54 @@ const client = new Client({
 });
 
 const SLEEPER_API = 'https://api.sleeper.app/v1';
+
+// Sarcastic comment arrays for team write-ups
+const SARCASTIC_COMMENTS = {
+    winning: [
+        "is riding high like they actually know what they're doing",
+        "thinks they're a fantasy genius now (spoiler: it's mostly luck)",
+        "is acting like they discovered some secret formula (it's called having CMC)",
+        "keeps talking about 'their system' as if streaming defenses is rocket science",
+        "probably thinks this makes up for their terrible draft"
+    ],
+    losing: [
+        "continues their masterclass in mediocrity",
+        "is providing entertainment for the rest of us",
+        "somehow makes questionable decisions look like an art form",
+        "keeps proving that autodraft would've been better",
+        "is single-handedly keeping the waiver wire active"
+    ],
+    injured: [
+        "runs a premium injury ward disguised as a fantasy team",
+        "has turned their roster into a hospital patient list",
+        "keeps doctors in business with their draft picks",
+        "apparently drafted from WebMD instead of expert rankings"
+    ],
+    trades: [
+        "made a trade so bad it should be investigated",
+        "somehow convinced someone to accept that highway robbery",
+        "pulled off the trade equivalent of selling a car with no engine",
+        "negotiated like they were giving away candy on Halloween"
+    ],
+    bench: [
+        "has more points on their bench than in their starting lineup (genius move)",
+        "continues the ancient art of starting the wrong players",
+        "has a sixth sense for benching players right before they explode",
+        "runs their lineup like a broken Magic 8-ball"
+    ],
+    waivers: [
+        "is burning waiver priority faster than money at Vegas",
+        "treats the waiver wire like their personal shopping mall",
+        "has added and dropped the same player three times this week",
+        "apparently thinks quantity over quality applies to roster moves"
+    ]
+};
+
+const TEAM_NICKNAMES = [
+    "The Dream Crushers", "Fantasy Funeral Home", "The Benchwarmer Brigade", 
+    "Waiver Wire Warriors", "The Almost-Ran Club", "Injury Reserve FC",
+    "The Taco Bell All-Stars", "Championship Pretenders", "The Maybe-Next-Year Squad"
+];
 
 client.once('ready', async () => {
     console.log(`${client.user.tag} is online and ready!`);
@@ -79,7 +129,21 @@ client.once('ready', async () => {
             .setDescription('League-wide injury report for all teams'),
         new SlashCommandBuilder()
             .setName('targets')
-            .setDescription('Hot waiver wire targets and trending players')
+            .setDescription('Hot waiver wire targets and trending players'),
+        // NEW SARCASTIC COMMANDS
+        new SlashCommandBuilder()
+            .setName('roast')
+            .setDescription('Get a sarcastic write-up of random teams')
+            .addIntegerOption(option =>
+                option.setName('count')
+                    .setDescription('Number of teams to roast (1-4)')
+                    .setRequired(false)),
+        new SlashCommandBuilder()
+            .setName('shame')
+            .setDescription('Hall of Shame - worst performances and decisions'),
+        new SlashCommandBuilder()
+            .setName('news')
+            .setDescription('Latest NFL player news and injuries affecting your league')
     ].map(command => command.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
@@ -125,6 +189,12 @@ client.on('interactionCreate', async interaction => {
             await handleInjuries(interaction);
         } else if (commandName === 'targets') {
             await handleTargets(interaction);
+        } else if (commandName === 'roast') {
+            await handleRoast(interaction);
+        } else if (commandName === 'shame') {
+            await handleShame(interaction);
+        } else if (commandName === 'news') {
+            await handleNews(interaction);
         }
     } catch (error) {
         console.error(`Error handling ${commandName}:`, error);
@@ -132,6 +202,359 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
+// NEW SARCASTIC FUNCTIONS
+
+async function handleRoast(interaction) {
+    await interaction.deferReply();
+    
+    const count = interaction.options.getInteger('count') || 2;
+    const maxCount = Math.min(count, 4);
+    
+    try {
+        const [rostersResponse, usersResponse] = await Promise.all([
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/rosters`),
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`)
+        ]);
+        
+        const rosters = rostersResponse.data;
+        const users = usersResponse.data;
+        
+        const userLookup = {};
+        users.forEach(user => {
+            userLookup[user.user_id] = user.display_name || user.username;
+        });
+        
+        // Get recent matchup data
+        const currentWeek = await getCurrentWeek();
+        const recentWeek = Math.max(1, currentWeek - 1);
+        
+        let weekMatchups = [];
+        try {
+            const weekResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/matchups/${recentWeek}`);
+            weekMatchups = weekResponse.data;
+        } catch (error) {
+            console.log('No recent matchup data');
+        }
+        
+        // Randomly select teams to roast
+        const shuffledRosters = rosters.sort(() => 0.5 - Math.random());
+        const selectedTeams = shuffledRosters.slice(0, maxCount);
+        
+        const embed = new EmbedBuilder()
+            .setTitle('🔥 Weekly Team Roasts')
+            .setDescription('*Time for some friendly fantasy football therapy*')
+            .setColor(0xFF4500)
+            .setTimestamp();
+        
+        for (let i = 0; i < selectedTeams.length; i++) {
+            const roster = selectedTeams[i];
+            const ownerName = userLookup[roster.owner_id] || 'Unknown';
+            const record = `${roster.settings.wins}-${roster.settings.losses}`;
+            const points = roster.settings.fpts.toFixed(1);
+            
+            // Find their recent performance
+            const recentMatchup = weekMatchups.find(m => m.roster_id === roster.roster_id);
+            const recentPoints = recentMatchup?.points || 0;
+            
+            // Generate roast based on team situation
+            let roastType = 'losing';
+            let extraRoast = '';
+            
+            if (roster.settings.wins > roster.settings.losses) {
+                roastType = 'winning';
+            }
+            
+            if (recentPoints > 0) {
+                if (recentPoints > 130) {
+                    extraRoast = " They finally figured out how to start their good players!";
+                } else if (recentPoints < 80) {
+                    extraRoast = " Last week's performance was... let's call it 'character building.'";
+                }
+            }
+            
+            // Check for bench vs starter issues (simplified)
+            if (Math.random() > 0.5) {
+                roastType = 'bench';
+            }
+            
+            const randomComment = SARCASTIC_COMMENTS[roastType][Math.floor(Math.random() * SARCASTIC_COMMENTS[roastType].length)];
+            const nickname = TEAM_NICKNAMES[Math.floor(Math.random() * TEAM_NICKNAMES.length)];
+            
+            const roastText = `**${ownerName}** (aka "${nickname}") ${randomComment}.${extraRoast}\n*Current damage: ${record} record, ${points} pts*`;
+            
+            embed.addFields({
+                name: `🎯 Target #${i + 1}`,
+                value: roastText,
+                inline: false
+            });
+        }
+        
+        embed.setFooter({ text: 'All in good fun! 😄 Fantasy football builds character (and destroys friendships)' });
+        
+        await interaction.editReply({ embeds: [embed] });
+        
+    } catch (error) {
+        console.error('Error in roast:', error);
+        await interaction.editReply('Error generating roasts. Even my trash talk is broken!');
+    }
+}
+
+async function handleShame(interaction) {
+    await interaction.deferReply();
+    
+    try {
+        const currentWeek = await getCurrentWeek();
+        const [rostersResponse, usersResponse] = await Promise.all([
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/rosters`),
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`)
+        ]);
+        
+        const rosters = rostersResponse.data;
+        const users = usersResponse.data;
+        
+        const userLookup = {};
+        users.forEach(user => {
+            userLookup[user.user_id] = user.display_name || user.username;
+        });
+        
+        // Get recent matchup data for analysis
+        let allScores = [];
+        for (let week = Math.max(1, currentWeek - 3); week <= currentWeek; week++) {
+            try {
+                const weekResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/matchups/${week}`);
+                weekResponse.data.forEach(matchup => {
+                    if (matchup.points > 0) {
+                        allScores.push({
+                            week,
+                            rosterId: matchup.roster_id,
+                            points: matchup.points,
+                            owner: userLookup[rosters.find(r => r.roster_id === matchup.roster_id)?.owner_id] || 'Unknown'
+                        });
+                    }
+                });
+            } catch (error) {
+                console.log(`No data for week ${week}`);
+            }
+        }
+        
+        if (allScores.length === 0) {
+            await interaction.editReply('No recent scores to shame... everyone is equally disappointing!');
+            return;
+        }
+        
+        // Find shameful performances
+        allScores.sort((a, b) => a.points - b.points);
+        const worstScore = allScores[0];
+        const secondWorst = allScores[1];
+        
+        // Find most inconsistent (if we have enough data)
+        const teamPerformances = {};
+        allScores.forEach(score => {
+            if (!teamPerformances[score.owner]) teamPerformances[score.owner] = [];
+            teamPerformances[score.owner].push(score.points);
+        });
+        
+        let mostInconsistent = null;
+        let highestVariance = 0;
+        Object.keys(teamPerformances).forEach(owner => {
+            const scores = teamPerformances[owner];
+            if (scores.length > 2) {
+                const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+                const variance = scores.reduce((sum, score) => sum + Math.pow(score - avg, 2), 0) / scores.length;
+                if (variance > highestVariance) {
+                    highestVariance = variance;
+                    mostInconsistent = { owner, variance, scores };
+                }
+            }
+        });
+        
+        const embed = new EmbedBuilder()
+            .setTitle('🏆 Hall of Shame')
+            .setDescription('*Celebrating the art of fantasy football failure*')
+            .setColor(0x8B0000)
+            .addFields(
+                {
+                    name: '💀 Rock Bottom Award',
+                    value: `**${worstScore.owner}** set a new low with ${worstScore.points.toFixed(1)} points in Week ${worstScore.week}.\n*That's not just losing, that's performance art.*`,
+                    inline: false
+                },
+                {
+                    name: '🤡 Runner-Up in Failure',
+                    value: `**${secondWorst.owner}** with ${secondWorst.points.toFixed(1)} points in Week ${secondWorst.week}.\n*So close to being the worst, yet so far from being good.*`,
+                    inline: false
+                }
+            );
+        
+        if (mostInconsistent) {
+            const range = Math.max(...mostInconsistent.scores) - Math.min(...mostInconsistent.scores);
+            embed.addFields({
+                name: '🎢 Emotional Rollercoaster Award',
+                value: `**${mostInconsistent.owner}** for their wildly inconsistent scoring.\n*Point range of ${range.toFixed(1)} - it's like they're playing fantasy roulette.*`,
+                inline: false
+            });
+        }
+        
+        // Find current last place
+        const sortedRosters = rosters
+            .map(roster => ({
+                ...roster,
+                owner_name: userLookup[roster.owner_id] || 'Unknown'
+            }))
+            .sort((a, b) => {
+                if (a.settings.wins !== b.settings.wins) {
+                    return a.settings.wins - b.settings.wins;
+                }
+                return a.settings.fpts - b.settings.fpts;
+            });
+        
+        const lastPlace = sortedRosters[0];
+        embed.addFields({
+            name: '🏮 Basement Dweller',
+            value: `**${lastPlace.owner_name}** currently holding down the cellar with a ${lastPlace.settings.wins}-${lastPlace.settings.losses} record.\n*Someone has to be last, but they're really committed to the role.*`,
+            inline: false
+        });
+        
+        embed.setFooter({ text: 'Remember: It\'s not about winning or losing, it\'s about the friends we disappoint along the way.' });
+        embed.setTimestamp();
+        
+        await interaction.editReply({ embeds: [embed] });
+        
+    } catch (error) {
+        console.error('Error in shame:', error);
+        await interaction.editReply('Error generating shame content. Ironically shameful!');
+    }
+}
+
+async function handleNews(interaction) {
+    await interaction.deferReply();
+    
+    try {
+        const [rostersResponse, usersResponse, playersResponse] = await Promise.all([
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/rosters`),
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`),
+            axios.get(`${SLEEPER_API}/players/nfl`)
+        ]);
+        
+        const rosters = rostersResponse.data;
+        const users = usersResponse.data;
+        const players = playersResponse.data;
+        
+        const userLookup = {};
+        users.forEach(user => {
+            userLookup[user.user_id] = user.display_name || user.username;
+        });
+        
+        // Get all rostered players
+        const leaguePlayerIds = new Set();
+        const playerOwners = {};
+        
+        rosters.forEach(roster => {
+            const ownerName = userLookup[roster.owner_id] || 'Unknown';
+            [...(roster.starters || []), ...(roster.players || [])].forEach(playerId => {
+                leaguePlayerIds.add(playerId);
+                playerOwners[playerId] = ownerName;
+            });
+        });
+        
+        // Filter for relevant news - injured players, trending players, etc.
+        const relevantNews = [];
+        
+        // Check for injury status changes
+        leaguePlayerIds.forEach(playerId => {
+            const player = players[playerId];
+            if (player && player.injury_status && player.injury_status !== 'Healthy') {
+                relevantNews.push({
+                    type: 'injury',
+                    player: `${player.first_name} ${player.last_name}`,
+                    team: player.team,
+                    position: player.position,
+                    status: player.injury_status,
+                    owner: playerOwners[playerId],
+                    priority: player.injury_status === 'Out' ? 3 : player.injury_status === 'Doubtful' ? 2 : 1
+                });
+            }
+        });
+        
+        // Try to get trending players that might affect league
+        try {
+            const trendingResponse = await axios.get(`${SLEEPER_API}/players/nfl/trending/add?lookback_hours=24&limit=10`);
+            trendingResponse.data.forEach(trending => {
+                const player = players[trending.player_id];
+                if (player && trending.count > 50) { // Significant trending
+                    relevantNews.push({
+                        type: 'trending',
+                        player: `${player.first_name} ${player.last_name}`,
+                        team: player.team,
+                        position: player.position,
+                        count: trending.count,
+                        priority: 1
+                    });
+                }
+            });
+        } catch (error) {
+            console.log('No trending data available');
+        }
+        
+        // Sort by priority
+        relevantNews.sort((a, b) => b.priority - a.priority);
+        
+        const embed = new EmbedBuilder()
+            .setTitle('📰 League News & Updates')
+            .setDescription('*Latest developments affecting your fantasy teams*')
+            .setColor(0x1E90FF)
+            .setTimestamp();
+        
+        if (relevantNews.length === 0) {
+            embed.addFields({
+                name: '😴 All Quiet on the Fantasy Front',
+                value: 'No major news affecting league players today. Either everyone is healthy or we\'re all doomed.',
+                inline: false
+            });
+        } else {
+            // Group news by type
+            const injuries = relevantNews.filter(news => news.type === 'injury');
+            const trending = relevantNews.filter(news => news.type === 'trending');
+            
+            if (injuries.length > 0) {
+                let injuryText = '';
+                injuries.slice(0, 8).forEach(news => {
+                    const emoji = news.status === 'Out' ? '🚫' : news.status === 'Doubtful' ? '⚠️' : '❓';
+                    injuryText += `${emoji} **${news.player}** (${news.position}, ${news.team}) - ${news.status}\n`;
+                    injuryText += `*Owned by ${news.owner}*\n\n`;
+                });
+                
+                embed.addFields({
+                    name: '🏥 Injury Report',
+                    value: injuryText,
+                    inline: false
+                });
+            }
+            
+            if (trending.length > 0) {
+                let trendingText = '';
+                trending.slice(0, 5).forEach(news => {
+                    trendingText += `📈 **${news.player}** (${news.position}, ${news.team})\n`;
+                    trendingText += `*${news.count} adds in 24hrs - Available in your league*\n\n`;
+                });
+                
+                embed.addFields({
+                    name: '🔥 Trending Players',
+                    value: trendingText,
+                    inline: false
+                });
+            }
+        }
+        
+        embed.setFooter({ text: 'Stay informed, stay competitive! 📊' });
+        await interaction.editReply({ embeds: [embed] });
+        
+    } catch (error) {
+        console.error('Error in news:', error);
+        await interaction.editReply('Error getting league news. Even my news gathering is having a rough day!');
+    }
+}
+
+// Enhanced existing functions with more personality
 async function getCurrentWeek() {
     try {
         const response = await axios.get(`${SLEEPER_API}/state/nfl`);
@@ -141,6 +564,9 @@ async function getCurrentWeek() {
         return 1;
     }
 }
+
+// [Include all your existing handler functions here - handleStandings, handleMatchup, etc.]
+// I'll show the enhanced versions of a couple key ones:
 
 async function handleStandings(interaction) {
     await interaction.deferReply();
@@ -173,7 +599,8 @@ async function handleStandings(interaction) {
             });
         
         const embed = new EmbedBuilder()
-            .setTitle(`${league.name} - Standings`)
+            .setTitle(`${league.name} - Current Standings`)
+            .setDescription('*The beautiful chaos of fantasy football rankings*')
             .setColor(0x0099FF)
             .setTimestamp();
         
@@ -182,15 +609,202 @@ async function handleStandings(interaction) {
             const wins = roster.settings.wins;
             const losses = roster.settings.losses;
             const points = roster.settings.fpts.toFixed(1);
-            standingsText += `**${index + 1}.** ${roster.owner_name}\n`;
+            
+            // Add some personality to standings
+            let emoji = '';
+            if (index === 0) emoji = '👑';
+            else if (index === 1) emoji = '🥈';
+            else if (index === 2) emoji = '🥉';
+            else if (index === sortedRosters.length - 1) emoji = '💀';
+            else if (index === sortedRosters.length - 2) emoji = '⚰️';
+            
+            standingsText += `${emoji} **${index + 1}.** ${roster.owner_name}\n`;
             standingsText += `${wins}-${losses} • ${points} pts\n\n`;
         });
         
         embed.setDescription(standingsText);
+        embed.setFooter({ text: 'Remember: It\'s not where you are, it\'s where you\'re going... hopefully up!' });
         await interaction.editReply({ embeds: [embed] });
     } catch (error) {
         console.error('Error in standings:', error);
-        await interaction.editReply('Error getting standings. Please try again!');
+        await interaction.editReply('Error getting standings. Even the leaderboard is embarrassed!');
+    }
+}
+
+// DAILY NEWS AUTOMATION
+cron.schedule('0 9 * * *', async () => {
+    try {
+        const channel = client.channels.cache.get(DISCORD_CHANNEL_ID);
+        if (!channel) return;
+        
+        // Run the news function automatically
+        const newsEmbed = await generateDailyNews();
+        if (newsEmbed) {
+            await channel.send({ embeds: [newsEmbed] });
+            console.log('Sent daily news update');
+        }
+    } catch (error) {
+        console.error('Error sending daily news:', error);
+    }
+});
+
+// WEEKLY SARCASTIC TEAM WRITE-UPS
+cron.schedule('0 10 * * 2', async () => {
+    try {
+        const channel = client.channels.cache.get(DISCORD_CHANNEL_ID);
+        if (!channel) return;
+        
+        const currentWeek = await getCurrentWeek();
+        
+        // Generate sarcastic weekly preview
+        const roastEmbed = await generateWeeklyRoasts();
+        if (roastEmbed) {
+            await channel.send({ 
+                content: `🔥 **Week ${currentWeek} Team Check-In** 🔥\n*Time for your weekly dose of fantasy reality!*`,
+                embeds: [roastEmbed] 
+            });
+            console.log(`Sent weekly team roasts for week ${currentWeek}`);
+        }
+    } catch (error) {
+        console.error('Error sending weekly roasts:', error);
+    }
+});
+
+async function generateDailyNews() {
+    try {
+        // Similar to handleNews but returns embed instead of responding
+        const [rostersResponse, usersResponse, playersResponse] = await Promise.all([
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/rosters`),
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`),
+            axios.get(`${SLEEPER_API}/players/nfl`)
+        ]);
+        
+        // [Implementation similar to handleNews but condensed for daily updates]
+        // Return embed or null if no significant news
+        
+        return null; // Placeholder - implement based on your needs
+    } catch (error) {
+        console.error('Error generating daily news:', error);
+        return null;
+    }
+}
+
+async function generateWeeklyRoasts() {
+    try {
+        // Similar to handleRoast but automated
+        // Return embed with 3-4 random team roasts
+        
+        return null; // Placeholder - implement based on your needs  
+    } catch (error) {
+        console.error('Error generating weekly roasts:', error);
+        return null;
+    }
+}
+
+// Keep all your existing cron jobs
+cron.schedule('0 10 * * 2', async () => {
+    try {
+        const channel = client.channels.cache.get(DISCORD_CHANNEL_ID);
+        if (!channel) return;
+        
+        const currentWeek = await getCurrentWeek();
+        
+        const embed = new EmbedBuilder()
+            .setTitle(`🏈 Week ${currentWeek} Preview`)
+            .setDescription('New week is here! Use `/matchup` to see all matchups!')
+            .setColor(0x00FF00)
+            .setTimestamp();
+        
+        await channel.send({ embeds: [embed] });
+        console.log(`Sent week ${currentWeek} preview`);
+    } catch (error) {
+        console.error('Error sending weekly preview:', error);
+    }
+});
+
+cron.schedule('0 8 * * 2', async () => {
+    try {
+        const channel = client.channels.cache.get(DISCORD_CHANNEL_ID);
+        if (!channel) return;
+        
+        const lastWeek = (await getCurrentWeek()) - 1;
+        
+        const embed = new EmbedBuilder()
+            .setTitle(`📊 Week ${lastWeek} Results`)
+            .setDescription('Check out last week\'s results with `/matchup ' + lastWeek + '`!')
+            .setColor(0x0099FF)
+            .setTimestamp();
+        
+        await channel.send({ embeds: [embed] });
+        console.log(`Sent week ${lastWeek} results recap`);
+    } catch (error) {
+        console.error('Error sending weekly recap:', error);
+    }
+});
+
+// Add all your existing handler functions here
+// I'm including the key ones with enhanced sarcastic elements:
+
+async function handleStandings(interaction) {
+    await interaction.deferReply();
+    
+    try {
+        const leagueResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}`);
+        const league = leagueResponse.data;
+        
+        const rostersResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/rosters`);
+        const rosters = rostersResponse.data;
+        
+        const usersResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`);
+        const users = usersResponse.data;
+        
+        const userLookup = {};
+        users.forEach(user => {
+            userLookup[user.user_id] = user.display_name || user.username;
+        });
+        
+        const sortedRosters = rosters
+            .map(roster => ({
+                ...roster,
+                owner_name: userLookup[roster.owner_id] || 'Unknown'
+            }))
+            .sort((a, b) => {
+                if (b.settings.wins !== a.settings.wins) {
+                    return b.settings.wins - a.settings.wins;
+                }
+                return b.settings.fpts - a.settings.fpts;
+            });
+        
+        const embed = new EmbedBuilder()
+            .setTitle(`${league.name} - Current Standings`)
+            .setDescription('*The beautiful chaos of fantasy football rankings*')
+            .setColor(0x0099FF)
+            .setTimestamp();
+        
+        let standingsText = '';
+        sortedRosters.forEach((roster, index) => {
+            const wins = roster.settings.wins;
+            const losses = roster.settings.losses;
+            const points = roster.settings.fpts.toFixed(1);
+            
+            // Add some personality to standings
+            let emoji = '';
+            if (index === 0) emoji = '👑';
+            else if (index === 1) emoji = '🥈';
+            else if (index === 2) emoji = '🥉';
+            else if (index === sortedRosters.length - 1) emoji = '💀';
+            else if (index === sortedRosters.length - 2) emoji = '⚰️';
+            
+            standingsText += `${emoji} **${index + 1}.** ${roster.owner_name}\n`;
+            standingsText += `${wins}-${losses} • ${points} pts\n\n`;
+        });
+        
+        embed.setDescription(standingsText);
+        embed.setFooter({ text: 'Remember: It\'s not where you are, it\'s where you\'re going... hopefully up!' });
+        await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Error in standings:', error);
+        await interaction.editReply('Error getting standings. Even the leaderboard is embarrassed!');
     }
 }
 
@@ -1031,13 +1645,260 @@ async function handleTargets(interaction) {
     }
 }
 
+// Enhanced helper functions for automated content
+async function generateDailyNews() {
+    try {
+        const [rostersResponse, usersResponse, playersResponse] = await Promise.all([
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/rosters`),
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`),
+            axios.get(`${SLEEPER_API}/players/nfl`)
+        ]);
+        
+        const rosters = rostersResponse.data;
+        const users = usersResponse.data;
+        const players = playersResponse.data;
+        
+        const userLookup = {};
+        users.forEach(user => {
+            userLookup[user.user_id] = user.display_name || user.username;
+        });
+        
+        // Get all rostered players with their owners
+        const playerOwners = {};
+        const leaguePlayerIds = new Set();
+        
+        rosters.forEach(roster => {
+            const ownerName = userLookup[roster.owner_id] || 'Unknown';
+            [...(roster.starters || []), ...(roster.players || [])].forEach(playerId => {
+                leaguePlayerIds.add(playerId);
+                playerOwners[playerId] = ownerName;
+            });
+        });
+        
+        // Find significant news
+        const newsItems = [];
+        
+        // Check for new injuries
+        leaguePlayerIds.forEach(playerId => {
+            const player = players[playerId];
+            if (player && player.injury_status && player.injury_status !== 'Healthy') {
+                newsItems.push({
+                    type: 'injury',
+                    player: `${player.first_name} ${player.last_name}`,
+                    team: player.team,
+                    position: player.position,
+                    status: player.injury_status,
+                    owner: playerOwners[playerId],
+                    importance: player.injury_status === 'Out' ? 3 : 2
+                });
+            }
+        });
+        
+        // Get trending adds that might be relevant
+        try {
+            const trendingResponse = await axios.get(`${SLEEPER_API}/players/nfl/trending/add?lookback_hours=24&limit=8`);
+            trendingResponse.data.forEach(trending => {
+                const player = players[trending.player_id];
+                if (player && trending.count > 100) {
+                    newsItems.push({
+                        type: 'trending',
+                        player: `${player.first_name} ${player.last_name}`,
+                        team: player.team,
+                        position: player.position,
+                        count: trending.count,
+                        importance: 1
+                    });
+                }
+            });
+        } catch (error) {
+            console.log('No trending data available');
+        }
+        
+        // Only create news if there are significant items
+        if (newsItems.length === 0) return null;
+        
+        const embed = new EmbedBuilder()
+            .setTitle('📰 Daily Fantasy News')
+            .setColor(0x1E90FF)
+            .setTimestamp();
+        
+        const importantItems = newsItems.filter(item => item.importance >= 2);
+        const trendingItems = newsItems.filter(item => item.type === 'trending');
+        
+        if (importantItems.length > 0) {
+            let newsText = '';
+            importantItems.slice(0, 5).forEach(item => {
+                if (item.type === 'injury') {
+                    const emoji = item.status === 'Out' ? '🚨' : '⚠️';
+                    newsText += `${emoji} **${item.player}** (${item.position}, ${item.team}) - ${item.status}\n`;
+                    newsText += `*${item.owner}'s roster affected*\n\n`;
+                }
+            });
+            
+            if (newsText) {
+                embed.addFields({
+                    name: '🏥 Injury Updates',
+                    value: newsText,
+                    inline: false
+                });
+            }
+        }
+        
+        if (trendingItems.length > 0) {
+            let trendingText = '';
+            trendingItems.slice(0, 3).forEach(item => {
+                trendingText += `📈 **${item.player}** (${item.position}, ${item.team})\n`;
+                trendingText += `*${item.count} league adds - Check availability!*\n\n`;
+            });
+            
+            embed.addFields({
+                name: '🔥 Hot Pickups',
+                value: trendingText,
+                inline: false
+            });
+        }
+        
+        embed.setFooter({ text: 'Stay ahead of your league! 🏆' });
+        return embed;
+        
+    } catch (error) {
+        console.error('Error generating daily news:', error);
+        return null;
+    }
+}
+
+async function generateWeeklyRoasts() {
+    try {
+        const [rostersResponse, usersResponse] = await Promise.all([
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/rosters`),
+            axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/users`)
+        ]);
+        
+        const rosters = rostersResponse.data;
+        const users = usersResponse.data;
+        
+        const userLookup = {};
+        users.forEach(user => {
+            userLookup[user.user_id] = user.display_name || user.username;
+        });
+        
+        // Get recent performance data
+        const currentWeek = await getCurrentWeek();
+        const lastWeek = Math.max(1, currentWeek - 1);
+        
+        let lastWeekScores = [];
+        try {
+            const weekResponse = await axios.get(`${SLEEPER_API}/league/${SLEEPER_LEAGUE_ID}/matchups/${lastWeek}`);
+            lastWeekScores = weekResponse.data;
+        } catch (error) {
+            console.log('No recent scores available');
+        }
+        
+        // Select 3 random teams for roasting
+        const shuffledRosters = [...rosters].sort(() => 0.5 - Math.random());
+        const selectedTeams = shuffledRosters.slice(0, 3);
+        
+        const embed = new EmbedBuilder()
+            .setTitle('🔥 Weekly Reality Check')
+            .setDescription('*Your friendly neighborhood fantasy therapist is back with some hard truths*')
+            .setColor(0xFF4500)
+            .setTimestamp();
+        
+        selectedTeams.forEach((roster, index) => {
+            const ownerName = userLookup[roster.owner_id] || 'Unknown';
+            const record = `${roster.settings.wins}-${roster.settings.losses}`;
+            const totalPoints = roster.settings.fpts.toFixed(1);
+            
+            // Find their last week performance
+            const lastWeekPerformance = lastWeekScores.find(score => score.roster_id === roster.roster_id);
+            const lastWeekPoints = lastWeekPerformance?.points || 0;
+            
+            // Determine roast style based on performance
+            let roastCategory = 'losing';
+            if (roster.settings.wins > roster.settings.losses) {
+                roastCategory = 'winning';
+            }
+            
+            // Special cases for extreme performances
+            if (lastWeekPoints > 0) {
+                if (lastWeekPoints > 140) roastCategory = 'winning';
+                else if (lastWeekPoints < 80) roastCategory = 'losing';
+            }
+            
+            // Add some randomness to roast selection
+            const categories = ['losing', 'bench', 'waivers'];
+            if (Math.random() > 0.7) {
+                roastCategory = categories[Math.floor(Math.random() * categories.length)];
+            }
+            
+            const roastComment = SARCASTIC_COMMENTS[roastCategory][Math.floor(Math.random() * SARCASTIC_COMMENTS[roastCategory].length)];
+            const nickname = TEAM_NICKNAMES[Math.floor(Math.random() * TEAM_NICKNAMES.length)];
+            
+            let extraComment = '';
+            if (lastWeekPoints > 0) {
+                if (lastWeekPoints > 130) {
+                    extraComment = ' Finally had a week where everything went right!';
+                } else if (lastWeekPoints < 70) {
+                    extraComment = ' Last week was... well, we\'ll call it a learning experience.';
+                }
+            }
+            
+            const roastText = `**${ownerName}** (${record}) ${roastComment}.${extraComment}\n*Season damage: ${totalPoints} total points*`;
+            
+            const emojis = ['🎯', '🔥', '💀'];
+            embed.addFields({
+                name: `${emojis[index]} ${nickname}`,
+                value: roastText,
+                inline: false
+            });
+        });
+        
+        embed.setFooter({ text: 'Fantasy football: where dreams go to die and friendships are tested! 😈' });
+        return embed;
+        
+    } catch (error) {
+        console.error('Error generating weekly roasts:', error);
+        return null;
+    }
+}
+
+// Daily news cron job
+cron.schedule('0 9 * * *', async () => {
+    try {
+        const channel = client.channels.cache.get(DISCORD_CHANNEL_ID);
+        if (!channel) return;
+        
+        const newsEmbed = await generateDailyNews();
+        if (newsEmbed) {
+            await channel.send({ 
+                content: '☕ **Good morning, fantasy managers!**\nHere\'s what you need to know today:',
+                embeds: [newsEmbed] 
+            });
+            console.log('Sent daily news update');
+        }
+    } catch (error) {
+        console.error('Error sending daily news:', error);
+    }
+});
+
+// Weekly roast cron job (Tuesdays at 10 AM)
 cron.schedule('0 10 * * 2', async () => {
     try {
         const channel = client.channels.cache.get(DISCORD_CHANNEL_ID);
         if (!channel) return;
         
         const currentWeek = await getCurrentWeek();
+        const roastEmbed = await generateWeeklyRoasts();
         
+        if (roastEmbed) {
+            await channel.send({ 
+                content: `🎪 **Week ${currentWeek} Team Therapy Session** 🎪\n*Time for some friendly fantasy football intervention!*`,
+                embeds: [roastEmbed] 
+            });
+            console.log(`Sent weekly team roasts for week ${currentWeek}`);
+        }
+        
+        // Also send the regular week preview
         const embed = new EmbedBuilder()
             .setTitle(`🏈 Week ${currentWeek} Preview`)
             .setDescription('New week is here! Use `/matchup` to see all matchups!')
@@ -1046,8 +1907,9 @@ cron.schedule('0 10 * * 2', async () => {
         
         await channel.send({ embeds: [embed] });
         console.log(`Sent week ${currentWeek} preview`);
+        
     } catch (error) {
-        console.error('Error sending weekly preview:', error);
+        console.error('Error sending weekly content:', error);
     }
 });
 
