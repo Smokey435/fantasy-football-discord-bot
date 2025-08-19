@@ -144,7 +144,24 @@ client.once('ready', async () => {
         new SlashCommandBuilder()
             .setName('news')
             .setDescription('Latest NFL player news and injuries affecting your league')
-    ].map(command => command.toJSON());
+        client.once('ready', async () => {
+    console.log(`${client.user.tag} is online and ready!`);
+    console.log(`🌐 Bot dashboard available at: https://your-app-name.onrender.com`); // ADD THIS
+        // ADD THESE RIGHT AFTER YOUR EXISTING client.once('ready') FUNCTION
+client.on('disconnect', () => {
+    console.log(`🔌 Bot disconnected at: ${new Date().toISOString()}`);
+});
+
+client.on('reconnecting', () => {
+    console.log(`🔄 Bot reconnecting at: ${new Date().toISOString()}`);
+});
+
+client.on('error', error => {
+    console.error('❌ Discord client error:', error);
+});
+    
+    // rest of your existing code stays the same...
+});    ].map(command => command.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     
